@@ -64,6 +64,20 @@ rescue RuntimeError
   false
 end
 
+def user_can_authenticate?(name, password)
+  cmd = if Gem::Version.new(installed_rabbitmq_version) >= Gem::Version.new('3.7.10')
+          "rabbitmqctl -s authenticate_user #{name} #{password}"
+        else
+          "rabbitmqctl -q authenticate_user #{name} #{password}"
+        end
+  cmd = Mixlib::ShellOut.new(cmd, :env => shell_environment)
+  cmd.run_command
+  result = cmd.exitstatus == 0
+  Chef::Log.debug "rabbitmq_user_can_authenticate?: #{cmd.stdout}"
+  Chef::Log.debug "rabbitmq_user_can_authenticate?: #{name} #{result && 'can' || 'cannot'} authenticate using the provided password"
+  result
+end
+
 # does the user have the rights listed on the vhost?
 # empty perm_list means we're checking for any permissions
 def user_has_permissions?(name, vhost, perm_list = nil)
@@ -178,12 +192,16 @@ end
 action :change_password do
   if user_exists?(new_resource.user)
     new_password = new_resource.password.gsub("'", "'\\\\''")
-    cmd = "rabbitmqctl -q change_password #{new_resource.user} '#{new_password}'"
-    execute "rabbitmqctl -q change_password #{new_resource.user}" do # ~FC009
-      sensitive true if Gem::Version.new(Chef::VERSION.to_s) >= Gem::Version.new('11.14.2')
-      command cmd
-      environment shell_environment
-      Chef::Log.info "Changing password for RabbitMQ user '#{new_resource.user}'."
+    if user_can_authenticate?(new_resource.user, new_password)
+      Chef::Log.info "The password for RabbitMQ user '#{new_resource.user}' does not need to be changed."
+    else
+      cmd = "rabbitmqctl -q change_password #{new_resource.user} '#{new_password}'"
+      execute "rabbitmqctl -q change_password #{new_resource.user}" do # ~FC009
+        sensitive true if Gem::Version.new(Chef::VERSION.to_s) >= Gem::Version.new('11.14.2')
+        command cmd
+        environment shell_environment
+        Chef::Log.info "Changing password for RabbitMQ user '#{new_resource.user}'."
+      end
     end
   end
 end
